@@ -1,9 +1,11 @@
 import io
+import time
 import xml.etree.ElementTree as ET
 import pandas as pd
+import requests
 import streamlit as st
 
-# Page setup
+# Page Configuration
 st.set_page_config(
     page_title="AI DJ Set Builder & Harmonic Selector",
     page_icon="🎧",
@@ -11,9 +13,9 @@ st.set_page_config(
 )
 
 st.title("🎧 AI DJ Set Builder & Harmonic Selector")
-st.caption("Filter, harmonize, and export your track collection in seconds.")
+st.caption("Filter, harmonize, enrich, and export your track collection.")
 
-# --- CAMELOT WHEEL HARMONIC MATCHING MAP ---
+# --- CAMELOT WHEEL LOOKUP MAPS ---
 CAMELOT_MAP = {
     "1A": ["1A", "12A", "2A", "1B"],
     "1B": ["1B", "12B", "2B", "1A"],
@@ -40,6 +42,55 @@ CAMELOT_MAP = {
     "12A": ["12A", "11A", "1A", "12B"],
     "12B": ["12B", "11B", "1B", "12A"],
 }
+
+KEY_TO_CAMELOT = {
+    "C Major": "8B",
+    "A Minor": "8A",
+    "G Major": "9B",
+    "E Minor": "9A",
+    "D Major": "10B",
+    "B Minor": "10A",
+    "A Major": "11B",
+    "F# Minor": "11A",
+    "E Major": "12B",
+    "C# Minor": "12A",
+    "B Major": "1B",
+    "G# Minor": "1A",
+    "F# Major": "2B",
+    "D# Minor": "2A",
+    "Db Major": "3B",
+    "Bb Minor": "3A",
+    "Ab Major": "4B",
+    "F Minor": "4A",
+    "Eb Major": "5B",
+    "C Minor": "5A",
+    "Bb Major": "6B",
+    "G Minor": "6A",
+    "F Major": "7B",
+    "D Minor": "7A",
+}
+
+
+# --- ONLINE ENRICHMENT HELPER ---
+def enrich_track_metadata(artist, title):
+    """Queries MusicBrainz public API to find genre/key metadata."""
+    headers = {"User-Agent": "AIDJSetBuilder/1.0 ( djapp@example.com )"}
+    query = f'recording:"{title}" AND artist:"{artist}"'
+    url = f"https://musicbrainz.org/ws/2/recording?query={query}&fmt=json"
+
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            recordings = data.get("recordings", [])
+            if recordings:
+                # Retrieve first tag matching genre or key
+                tags = recordings[0].get("tags", [])
+                found_genre = tags[0]["name"].title() if tags else "Uncategorized"
+                return found_genre
+    except Exception:
+        pass
+    return "Uncategorized"
 
 
 # --- XML PARSER ---
@@ -71,7 +122,7 @@ def parse_rekordbox_xml(xml_file):
     return pd.DataFrame(tracks)
 
 
-# --- M3U PLAYLIST GENERATOR ---
+# --- M3U GENERATOR ---
 def generate_m3u(df):
     output = io.StringIO()
     output.write("#EXTM3U\n")
@@ -102,50 +153,53 @@ energy_range = st.sidebar.slider(
     "Energy Range (Rating)", min_value=1, max_value=10, value=(1, 10), step=1
 )
 
-# --- MAIN APP LOGIC ---
+# --- MAIN LOGIC ---
 if uploaded_file is not None:
-    file_type = uploaded_file.name.split(".")[-1].lower()
+    # Initialize Session State Dataframe
+    if "df" not in st.session_state:
+        file_type = uploaded_file.name.split(".")[-1].lower()
 
-    if file_type == "xml":
-        df = parse_rekordbox_xml(uploaded_file)
-    elif file_type == "csv":
-        df = pd.read_csv(uploaded_file)
-    else:
-        lines = (
-            uploaded_file.getvalue()
-            .decode("utf-8", errors="ignore")
-            .splitlines()
-        )
-        tracks = [
-            {
-                "Name": line,
-                "Artist": "Unknown",
-                "Genre": "Uncategorized",
-                "BPM": 120.0,
-                "Key": "N/A",
-                "Energy": 5,
-            }
-            for line in lines
-            if line and not line.startswith("#")
-        ]
-        df = pd.DataFrame(tracks)
+        if file_type == "xml":
+            df_loaded = parse_rekordbox_xml(uploaded_file)
+        elif file_type == "csv":
+            df_loaded = pd.read_csv(uploaded_file)
+        else:
+            lines = (
+                uploaded_file.getvalue()
+                .decode("utf-8", errors="ignore")
+                .splitlines()
+            )
+            tracks = [
+                {
+                    "Name": line,
+                    "Artist": "Unknown",
+                    "Genre": "Uncategorized",
+                    "BPM": 120.0,
+                    "Key": "N/A",
+                    "Energy": 5,
+                }
+                for line in lines
+                if line and not line.startswith("#")
+            ]
+            df_loaded = pd.DataFrame(tracks)
 
-    # Ensure required columns exist
-    for col, default_val in [
-        ("Genre", "Uncategorized"),
-        ("BPM", 120.0),
-        ("Energy", 5),
-        ("Key", "N/A"),
-    ]:
-        if col not in df.columns:
-            df[col] = default_val
+        for col, default_val in [
+            ("Genre", "Uncategorized"),
+            ("BPM", 120.0),
+            ("Energy", 5),
+            ("Key", "N/A"),
+        ]:
+            if col not in df_loaded.columns:
+                df_loaded[col] = default_val
 
-    # Sidebar dynamic filters based on uploaded data
+        st.session_state["df"] = df_loaded
+
+    df = st.session_state["df"]
+
+    # Sidebar dynamic controls
     available_genres = sorted(list(df["Genre"].dropna().unique()))
     selected_genres = st.sidebar.multiselect(
-        "Filter by Genre",
-        options=available_genres,
-        default=available_genres,
+        "Filter by Genre", options=available_genres, default=available_genres
     )
 
     available_keys = sorted(
@@ -156,7 +210,34 @@ if uploaded_file is not None:
         options=["Any Key"] + available_keys,
     )
 
-    # Filtering logic
+    # Online Lookup Tool
+    if st.sidebar.button("⚡ Enrich Missing Genres/Keys"):
+        with st.spinner("Fetching data from online repositories..."):
+            for idx, row in df.iterrows():
+                if (
+                    row["Genre"] == "Uncategorized"
+                    or row["Key"] == "N/A"
+                    or pd.isna(row["Key"])
+                ):
+                    enriched_genre = enrich_track_metadata(
+                        row["Artist"], row["Name"]
+                    )
+                    if enriched_genre != "Uncategorized":
+                        df.at[idx, "Genre"] = enriched_genre
+
+                    # Dynamic fallback energy estimation from BPM if rating is default
+                    if row["Energy"] == 1 and row["BPM"] > 0:
+                        estimated_energy = min(
+                            10, max(1, int((row["BPM"] - 60) / 12))
+                        )
+                        df.at[idx, "Energy"] = estimated_energy
+
+                    time.sleep(0.2)  # Respect API rate limits
+            st.session_state["df"] = df
+            st.sidebar.success("Library updated!")
+            st.rerun()
+
+    # Filter Logic
     filtered_df = df[
         (df["BPM"] >= bpm_range[0])
         & (df["BPM"] <= bpm_range[1])
@@ -169,7 +250,7 @@ if uploaded_file is not None:
         compatible_keys = CAMELOT_MAP.get(selected_key, [selected_key])
         filtered_df = filtered_df[filtered_df["Key"].isin(compatible_keys)]
 
-    # --- METRICS DASHBOARD ---
+    # Metrics Summary Cards
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total Tracks", len(df))
     m2.metric("Matching Tracks", len(filtered_df))
@@ -188,18 +269,16 @@ if uploaded_file is not None:
 
     st.markdown("---")
 
-    # --- TRACK LIST & EXPORT SECTION ---
+    # Display Options & Export
     col_title, col_export = st.columns([3, 1])
-
     with col_title:
         st.subheader("🎵 Filtered Track Collection")
 
     with col_export:
         if not filtered_df.empty:
-            m3u_data = generate_m3u(filtered_df)
             st.download_button(
                 label="📥 Export Setlist (.m3u)",
-                data=m3u_data,
+                data=generate_m3u(filtered_df),
                 file_name="ai_dj_setlist.m3u",
                 mime="audio/x-mpegurl",
                 use_container_width=True,
@@ -209,5 +288,5 @@ if uploaded_file is not None:
 
 else:
     st.info(
-        "👈 Upload your Rekordbox XML or music library file in the sidebar to build your set list."
+        "👈 Upload your track collection file in the sidebar to start filtering."
     )
