@@ -79,7 +79,7 @@ def fetch_audio_preview(artist, title):
     return None
 
 
-# Helper: Harmonic Transition Analysis & Pitch Adjustment
+# Helper: Transition Analysis
 def analyze_transition(prev_track, curr_track):
     if prev_track is None:
         return "🏁 SEED TRACK", "0.0%"
@@ -87,13 +87,11 @@ def analyze_transition(prev_track, curr_track):
     k1, k2 = str(prev_track["Key"]), str(curr_track["Key"])
     bpm1, bpm2 = float(prev_track["BPM"]), float(curr_track["BPM"])
 
-    # Calculate Pitch Adjustment %
     pitch_str = "N/A"
     if bpm1 > 0 and bpm2 > 0:
         pct_diff = ((bpm2 - bpm1) / bpm1) * 100
         pitch_str = f"{pct_diff:+.1f}%"
 
-    # Key Relationship Analysis
     if k1 == "N/A" or k2 == "N/A":
         key_rel = "Unknown Key Match"
     elif k1 == k2:
@@ -108,9 +106,10 @@ def analyze_transition(prev_track, curr_track):
     return key_rel, pitch_str
 
 
-# Parsers
-def parse_rekordbox_xml(xml_file):
-    tree = ET.parse(xml_file)
+# Persistent File Parsers with Caching
+@st.cache_data(show_spinner="Parsing Collection...")
+def parse_rekordbox_xml(file_bytes):
+    tree = ET.parse(io.BytesIO(file_bytes))
     root = tree.getroot()
     tracks = []
     for track in root.findall(".//TRACK"):
@@ -146,8 +145,9 @@ def parse_rekordbox_xml(xml_file):
     return pd.DataFrame(tracks)
 
 
-def parse_m3u_file(file_content):
-    lines = file_content.decode("utf-8", errors="ignore").splitlines()
+@st.cache_data(show_spinner="Parsing Playlist...")
+def parse_m3u_file(file_bytes):
+    lines = file_bytes.decode("utf-8", errors="ignore").splitlines()
     tracks = []
     current_title = ""
     for line in lines:
@@ -190,7 +190,7 @@ def generate_m3u(df):
     return output.getvalue()
 
 
-# Harmonic & Energy Algorithm
+# Harmonic Algorithm
 def build_harmonic_set(
     seed_track, pool_df, track_count, energy_mode, prioritize_key
 ):
@@ -241,11 +241,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown(
-    '<div class="hero-subtitle">Harmonic Key Matching • Pitch Adjustments • AI Set Curator</div>',
+    '<div class="hero-subtitle">Harmonic Key Matching • Persistent Cache • AI Set Curator</div>',
     unsafe_allow_html=True,
 )
 
-# Sidebar
+# Sidebar Controls
 st.sidebar.markdown("### 🎛️ CRATE CONTROLS")
 uploaded_file = st.sidebar.file_uploader(
     "Import Collection", type=["xml", "csv", "m3u", "m3u8"]
@@ -258,23 +258,23 @@ bpm_range = st.sidebar.slider(
 )
 energy_range = st.sidebar.slider("Energy Floor", 1, 10, (1, 10), step=1)
 
+# File Processing & Cache Restoration
 if uploaded_file is not None:
+    file_bytes = uploaded_file.getvalue()
     file_ext = uploaded_file.name.split(".")[-1].lower()
 
-    if (
-        "df" not in st.session_state
-        or st.session_state.get("last_file") != uploaded_file.name
-    ):
-        if file_ext == "xml":
-            df_loaded = parse_rekordbox_xml(uploaded_file)
-        elif file_ext == "csv":
-            df_loaded = pd.read_csv(uploaded_file)
-        else:
-            df_loaded = parse_m3u_file(uploaded_file.getvalue())
+    if file_ext == "xml":
+        df_loaded = parse_rekordbox_xml(file_bytes)
+    elif file_ext == "csv":
+        df_loaded = pd.read_csv(io.BytesIO(file_bytes))
+    else:
+        df_loaded = parse_m3u_file(file_bytes)
 
-        st.session_state["df"] = df_loaded
-        st.session_state["last_file"] = uploaded_file.name
+    st.session_state["df"] = df_loaded
+    st.session_state["last_file"] = uploaded_file.name
 
+# Main Application Execution (Runs even on page refresh if data is cached in session)
+if "df" in st.session_state and not st.session_state["df"].empty:
     df = st.session_state["df"]
 
     available_genres = sorted(list(df["Genre"].dropna().unique()))
@@ -305,6 +305,7 @@ if uploaded_file is not None:
             filtered_df["Key"].isin(comp_keys) | (filtered_df["Key"] == "N/A")
         ]
 
+    # Metrics Row
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("TOTAL TRACKS", len(df))
     m2.metric("CRATE MATCHES", len(filtered_df))
@@ -382,7 +383,6 @@ if uploaded_file is not None:
         else:
             st.dataframe(filtered_df, use_container_width=True, hide_index=True)
 
-    # AI Set Builder Tab
     with tab_ai_builder:
         st.subheader("🎯 Configure Your AI Set Strategy")
         if filtered_df.empty:
@@ -426,7 +426,6 @@ if uploaded_file is not None:
                 seed_row = filtered_df.iloc[selected_seed_idx]
                 prioritize_key = priority == "Strict Harmonic Key First"
 
-                # Store active list in session state for manual re-ordering
                 st.session_state["staged_set"] = build_harmonic_set(
                     seed_row,
                     filtered_df,
@@ -435,7 +434,6 @@ if uploaded_file is not None:
                     prioritize_key,
                 )
 
-            # Render & Re-order Active Staged Set
             if "staged_set" in st.session_state and st.session_state["staged_set"]:
                 st.markdown("---")
                 st.subheader("🎧 Generated Harmonic Sequence")
@@ -453,7 +451,6 @@ if uploaded_file is not None:
                         use_container_width=True,
                     )
 
-                # Track Items with Up/Down Controls & Transition Metrics
                 for i, track in enumerate(staged_list):
                     prev_track = staged_list[i - 1] if i > 0 else None
                     key_match_label, pitch_shift = analyze_transition(
