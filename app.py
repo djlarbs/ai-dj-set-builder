@@ -26,7 +26,9 @@ st.markdown(
     .track-title { font-size: 1rem; font-weight: 700; color: #ffffff; }
     .track-artist { font-size: 0.88rem; color: #aaaaaa; margin-bottom: 6px; }
     .badge { display: inline-block; padding: 2px 6px; font-size: 0.72rem; font-weight: 700; border-radius: 4px; background: #262626; color: #00f2fe; margin-right: 4px; }
-    .set-step { background: #121820; border-left: 4px solid #00f2fe; padding: 10px 14px; margin-bottom: 8px; border-radius: 4px; }
+    .badge-harmonic { background: #0d3b2e; color: #00ffa3; border: 1px solid #00ffa3; }
+    .badge-pitch { background: #3b2a0d; color: #ffb700; border: 1px solid #ffb700; }
+    .set-step { background: #121820; border-left: 4px solid #00f2fe; padding: 12px 16px; margin-bottom: 8px; border-radius: 6px; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -75,6 +77,35 @@ def fetch_audio_preview(artist, title):
     except Exception:
         pass
     return None
+
+
+# Helper: Harmonic Transition Analysis & Pitch Adjustment
+def analyze_transition(prev_track, curr_track):
+    if prev_track is None:
+        return "🏁 SEED TRACK", "0.0%"
+
+    k1, k2 = str(prev_track["Key"]), str(curr_track["Key"])
+    bpm1, bpm2 = float(prev_track["BPM"]), float(curr_track["BPM"])
+
+    # Calculate Pitch Adjustment %
+    pitch_str = "N/A"
+    if bpm1 > 0 and bpm2 > 0:
+        pct_diff = ((bpm2 - bpm1) / bpm1) * 100
+        pitch_str = f"{pct_diff:+.1f}%"
+
+    # Key Relationship Analysis
+    if k1 == "N/A" or k2 == "N/A":
+        key_rel = "Unknown Key Match"
+    elif k1 == k2:
+        key_rel = "Exact Key Match"
+    elif k1[0:-1] == k2[0:-1]:
+        key_rel = "Relative Major/Minor"
+    elif k2 in CAMELOT_MAP.get(k1, []):
+        key_rel = "Harmonic Match (Camelot ±1)"
+    else:
+        key_rel = "Energy Key Shift"
+
+    return key_rel, pitch_str
 
 
 # Parsers
@@ -163,7 +194,7 @@ def generate_m3u(df):
 def build_harmonic_set(
     seed_track, pool_df, track_count, energy_mode, prioritize_key
 ):
-    setlist = [seed_track]
+    setlist = [seed_track.to_dict()]
     used_indices = {seed_track.name}
 
     for step in range(1, track_count):
@@ -172,7 +203,6 @@ def build_harmonic_set(
         curr_key = current_track["Key"]
         curr_energy = current_track["Energy"]
 
-        # Target Energy Calculation
         if energy_mode == "Gradual Ramp Up":
             target_energy = min(10, curr_energy + 1)
         elif energy_mode == "Peak Hour Drop":
@@ -180,22 +210,17 @@ def build_harmonic_set(
         else:
             target_energy = curr_energy
 
-        # Compatible Keys
         valid_keys = CAMELOT_MAP.get(curr_key, [curr_key])
-
         candidates = pool_df[~pool_df.index.isin(used_indices)].copy()
         if candidates.empty:
             break
 
         def score_candidate(row):
             score = 0
-            # Key Match Scoring
             if row["Key"] in valid_keys or curr_key == "N/A":
                 score += 50 if prioritize_key else 30
-            # Energy Match Scoring
             energy_diff = abs(row["Energy"] - target_energy)
             score += max(0, 30 - (energy_diff * 6))
-            # BPM Distance Scoring (if BPM exists)
             if curr_bpm > 0 and row["BPM"] > 0:
                 bpm_diff = abs(row["BPM"] - curr_bpm)
                 score += max(0, 20 - (bpm_diff * 2))
@@ -204,10 +229,10 @@ def build_harmonic_set(
         candidates["Score"] = candidates.apply(score_candidate, axis=1)
         best_match = candidates.sort_values(by="Score", ascending=False).iloc[0]
 
-        setlist.append(best_match)
+        setlist.append(best_match.to_dict())
         used_indices.add(best_match.name)
 
-    return pd.DataFrame(setlist)
+    return setlist
 
 
 # Interface Header
@@ -216,7 +241,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown(
-    '<div class="hero-subtitle">Harmonic Key Matching • Dynamic BPM Engine • AI Set Curator</div>',
+    '<div class="hero-subtitle">Harmonic Key Matching • Pitch Adjustments • AI Set Curator</div>',
     unsafe_allow_html=True,
 )
 
@@ -233,7 +258,6 @@ bpm_range = st.sidebar.slider(
 )
 energy_range = st.sidebar.slider("Energy Floor", 1, 10, (1, 10), step=1)
 
-# Application Engine
 if uploaded_file is not None:
     file_ext = uploaded_file.name.split(".")[-1].lower()
 
@@ -253,7 +277,6 @@ if uploaded_file is not None:
 
     df = st.session_state["df"]
 
-    # Sidebar Multiselect Filter
     available_genres = sorted(list(df["Genre"].dropna().unique()))
     selected_genres = st.sidebar.multiselect(
         "Filter Genres", options=available_genres, default=available_genres
@@ -266,7 +289,6 @@ if uploaded_file is not None:
         "Camelot Target Key", options=["Any Key"] + available_keys
     )
 
-    # Core Filtering
     bpm_condition = (df["BPM"] >= bpm_range[0]) & (df["BPM"] <= bpm_range[1])
     zero_bpm_condition = df["BPM"] == 0.0
 
@@ -283,7 +305,6 @@ if uploaded_file is not None:
             filtered_df["Key"].isin(comp_keys) | (filtered_df["Key"] == "N/A")
         ]
 
-    # Metrics Row
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("TOTAL TRACKS", len(df))
     m2.metric("CRATE MATCHES", len(filtered_df))
@@ -302,7 +323,6 @@ if uploaded_file is not None:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Tabs: Curated Crate + AI Set Builder
     tab_crate, tab_ai_builder = st.tabs(
         ["🔥 Curated Crate", "🤖 AI Harmonic Set Builder"]
     )
@@ -362,7 +382,7 @@ if uploaded_file is not None:
         else:
             st.dataframe(filtered_df, use_container_width=True, hide_index=True)
 
-    # NEW: AI Set Builder Tab
+    # AI Set Builder Tab
     with tab_ai_builder:
         st.subheader("🎯 Configure Your AI Set Strategy")
         if filtered_df.empty:
@@ -399,17 +419,15 @@ if uploaded_file is not None:
             with c4:
                 priority = st.selectbox(
                     "Mix Priority",
-                    [
-                        "Strict Harmonic Key First",
-                        "Closest BPM First",
-                    ],
+                    ["Strict Harmonic Key First", "Closest BPM First"],
                 )
 
             if st.button("🚀 BUILD HARMONIC SET", use_container_width=True):
                 seed_row = filtered_df.iloc[selected_seed_idx]
                 prioritize_key = priority == "Strict Harmonic Key First"
 
-                generated_set = build_harmonic_set(
+                # Store active list in session state for manual re-ordering
+                st.session_state["staged_set"] = build_harmonic_set(
                     seed_row,
                     filtered_df,
                     set_length,
@@ -417,32 +435,71 @@ if uploaded_file is not None:
                     prioritize_key,
                 )
 
+            # Render & Re-order Active Staged Set
+            if "staged_set" in st.session_state and st.session_state["staged_set"]:
                 st.markdown("---")
                 st.subheader("🎧 Generated Harmonic Sequence")
+
+                staged_list = st.session_state["staged_set"]
+                export_df = pd.DataFrame(staged_list)
 
                 export_col1, export_col2 = st.columns([3, 1])
                 with export_col2:
                     st.download_button(
                         label="⚡ EXPORT SET (.M3U)",
-                        data=generate_m3u(generated_set),
+                        data=generate_m3u(export_df),
                         file_name="ai_harmonic_set.m3u",
                         mime="audio/x-mpegurl",
                         use_container_width=True,
                     )
 
-                for i, (_, row) in enumerate(generated_set.iterrows(), 1):
-                    st.markdown(
-                        f"""
-                    <div class="set-step">
-                        <strong>Track {i}: {row['Artist']} — {row['Name']}</strong><br>
-                        <span class="badge">KEY {row['Key']}</span>
-                        <span class="badge">BPM {row['BPM']}</span>
-                        <span class="badge">ENERGY {row['Energy']}/10</span>
-                        <span class="badge" style="color:#888;">GENRE: {row['Genre']}</span>
-                    </div>
-                    """,
-                        unsafe_allow_html=True,
+                # Track Items with Up/Down Controls & Transition Metrics
+                for i, track in enumerate(staged_list):
+                    prev_track = staged_list[i - 1] if i > 0 else None
+                    key_match_label, pitch_shift = analyze_transition(
+                        prev_track, track
                     )
+
+                    t_col, b_col1, b_col2 = st.columns([8, 1, 1])
+
+                    with t_col:
+                        st.markdown(
+                            f"""
+                        <div class="set-step">
+                            <strong>Track {i+1}: {track['Artist']} — {track['Name']}</strong><br>
+                            <span class="badge">KEY {track['Key']}</span>
+                            <span class="badge">BPM {track['BPM']}</span>
+                            <span class="badge">ENERGY {track['Energy']}/10</span>
+                            <span class="badge badge-harmonic">TRANSITION: {key_match_label}</span>
+                            <span class="badge badge-pitch">PITCH: {pitch_shift}</span>
+                        </div>
+                        """,
+                            unsafe_allow_html=True,
+                        )
+
+                    with b_col1:
+                        if i > 0:
+                            if st.button("▲", key=f"up_{i}"):
+                                (
+                                    st.session_state["staged_set"][i],
+                                    st.session_state["staged_set"][i - 1],
+                                ) = (
+                                    st.session_state["staged_set"][i - 1],
+                                    st.session_state["staged_set"][i],
+                                )
+                                st.rerun()
+
+                    with b_col2:
+                        if i < len(staged_list) - 1:
+                            if st.button("▼", key=f"down_{i}"):
+                                (
+                                    st.session_state["staged_set"][i],
+                                    st.session_state["staged_set"][i + 1],
+                                ) = (
+                                    st.session_state["staged_set"][i + 1],
+                                    st.session_state["staged_set"][i],
+                                )
+                                st.rerun()
 
 else:
     st.info("👈 Upload your music library file in the sidebar to enter the builder.")
