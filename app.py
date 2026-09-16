@@ -1,9 +1,10 @@
 import io
 import xml.etree.ElementTree as ET
 import pandas as pd
+import requests
 import streamlit as st
 
-# Page Configuration
+# Page Setup
 st.set_page_config(
     page_title="AI DJ SET BUILDER",
     page_icon="🎧",
@@ -11,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Dark Theme Styling
+# Dark Theme CSS
 st.markdown(
     """
 <style>
@@ -21,7 +22,7 @@ st.markdown(
     .hero-subtitle { color: #888888; font-size: 1rem; margin-bottom: 1.5rem; }
     div[data-testid="stMetric"] { background: #171717; border: 1px solid #262626; border-radius: 8px; padding: 12px; }
     div[data-testid="stMetricValue"] { font-size: 1.6rem !important; font-weight: 800 !important; color: #00f2fe; }
-    .track-card { background-color: #171717; border: 1px solid #262626; border-radius: 8px; padding: 14px; margin-bottom: 10px; }
+    .track-card { background-color: #171717; border: 1px solid #262626; border-radius: 8px; padding: 14px; margin-bottom: 6px; }
     .track-title { font-size: 1rem; font-weight: 700; color: #ffffff; }
     .track-artist { font-size: 0.88rem; color: #aaaaaa; margin-bottom: 6px; }
     .badge { display: inline-block; padding: 2px 6px; font-size: 0.72rem; font-weight: 700; border-radius: 4px; background: #262626; color: #00f2fe; margin-right: 4px; }
@@ -57,6 +58,22 @@ CAMELOT_MAP = {
     "12A": ["12A", "11A", "1A", "12B"],
     "12B": ["12B", "11B", "1B", "12A"],
 }
+
+
+# Audio Preview Resolver (Cached to avoid repetitive API requests)
+@st.cache_data(show_spinner=False)
+def fetch_audio_preview(artist, title):
+    try:
+        query = requests.utils.quote(f"{artist} {title}")
+        url = f"https://itunes.apple.com/search?term={query}&entity=song&limit=1"
+        res = requests.get(url, timeout=2.5)
+        if res.status_code == 200:
+            results = res.json().get("results", [])
+            if results and "previewUrl" in results[0]:
+                return results[0]["previewUrl"]
+    except Exception:
+        pass
+    return None
 
 
 # XML Parser
@@ -108,12 +125,10 @@ def parse_m3u_file(file_content):
         if not line:
             continue
         if line.startswith("#EXTINF:"):
-            # Parse EXTINF metadata if available: "#EXTINF:123,Artist - Title"
             parts = line.split(",", 1)
             if len(parts) > 1:
                 current_title = parts[1]
         elif not line.startswith("#"):
-            # Line contains track path or title
             track_name = current_title if current_title else line
             artist = "Unknown"
             title = track_name
@@ -153,7 +168,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown(
-    '<div class="hero-subtitle">Harmonic Key Matching • Dynamic BPM Engine • Collection Management</div>',
+    '<div class="hero-subtitle">Harmonic Key Matching • Dynamic BPM Engine • Track Previews</div>',
     unsafe_allow_html=True,
 )
 
@@ -170,7 +185,7 @@ bpm_range = st.sidebar.slider(
 )
 energy_range = st.sidebar.slider("Energy Floor", 1, 10, (1, 10), step=1)
 
-# Application Logic
+# Main Application Logic
 if uploaded_file is not None:
     file_ext = uploaded_file.name.split(".")[-1].lower()
 
@@ -190,12 +205,10 @@ if uploaded_file is not None:
 
     df = st.session_state["df"]
 
-    # Dynamic Genre Selection
+    # Sidebar Filters
     available_genres = sorted(list(df["Genre"].dropna().unique()))
     selected_genres = st.sidebar.multiselect(
-        "Filter Genres",
-        options=available_genres,
-        default=available_genres,
+        "Filter Genres", options=available_genres, default=available_genres
     )
 
     available_keys = sorted(
@@ -205,9 +218,9 @@ if uploaded_file is not None:
         "Camelot Target Key", options=["Any Key"] + available_keys
     )
 
-    # Filter Logic with fallback for missing BPMs (0.0)
+    # Filtering Logic
     bpm_condition = (df["BPM"] >= bpm_range[0]) & (df["BPM"] <= bpm_range[1])
-    zero_bpm_condition = df["BPM"] == 0.0  # Keep M3U tracks without BPM data
+    zero_bpm_condition = df["BPM"] == 0.0
 
     filtered_df = df[
         (bpm_condition | zero_bpm_condition)
@@ -222,7 +235,7 @@ if uploaded_file is not None:
             filtered_df["Key"].isin(comp_keys) | (filtered_df["Key"] == "N/A")
         ]
 
-    # Metrics Display
+    # Metrics Summary
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("TOTAL TRACKS", len(df))
     m2.metric("CRATE MATCHES", len(filtered_df))
@@ -241,7 +254,7 @@ if uploaded_file is not None:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Export & Output
+    # Export & Layout
     head_col1, head_col2 = st.columns([3, 1])
     with head_col1:
         st.subheader("🔥 CURATED CRATE")
@@ -263,14 +276,18 @@ if uploaded_file is not None:
     )
 
     if view_option == "Visual Crate Cards":
-        display_df = filtered_df.head(200)
+        # Limit preview rendering to top 50 matches for maximum performance
+        display_df = filtered_df.head(50)
         cols = st.columns(2)
+
         for idx, (_, row) in enumerate(display_df.iterrows()):
             col = cols[idx % 2]
             with col:
                 bpm_display = (
                     f"BPM {row['BPM']}" if row["BPM"] > 0 else "BPM N/A"
                 )
+
+                # Card HTML Structure
                 col.markdown(
                     f"""
                 <div class="track-card">
@@ -286,6 +303,14 @@ if uploaded_file is not None:
                 """,
                     unsafe_allow_html=True,
                 )
+
+                # Fetch Audio Preview URL
+                preview_url = fetch_audio_preview(row["Artist"], row["Name"])
+                if preview_url:
+                    col.audio(preview_url, format="audio/mp3")
+                else:
+                    col.caption("🔇 Audio preview unavailable")
+
     else:
         st.dataframe(filtered_df, use_container_width=True, hide_index=True)
 
