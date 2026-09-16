@@ -1,11 +1,9 @@
 import io
-import time
 import xml.etree.ElementTree as ET
 import pandas as pd
-import requests
 import streamlit as st
 
-# 1. PAGE SETUP
+# Page Configuration
 st.set_page_config(
     page_title="AI DJ SET BUILDER",
     page_icon="🎧",
@@ -13,95 +11,26 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# 2. CUSTOM CSS STYLING (BPM SUPREME DARK THEME)
+# Dark Theme CSS
 st.markdown(
     """
 <style>
-    /* Dark Theme Core */
-    .stApp {
-        background-color: #0d0d0d;
-        color: #ffffff;
-        font-family: 'Inter', sans-serif;
-    }
-    
-    /* Sidebar Styling */
-    section[data-testid="stSidebar"] {
-        background-color: #141414;
-        border-right: 1px solid #262626;
-    }
-    
-    /* Bold Hero Title */
-    .hero-title {
-        font-size: 3.2rem !important;
-        font-weight: 900 !important;
-        letter-spacing: -1.5px;
-        text-transform: uppercase;
-        line-height: 1.05;
-        color: #ffffff;
-        margin-bottom: 0.2rem;
-    }
-    
-    .hero-subtitle {
-        color: #888888;
-        font-size: 1.1rem;
-        font-weight: 500;
-        margin-bottom: 2rem;
-    }
-    
-    /* Metric Scorecards */
-    div[data-testid="stMetric"] {
-        background: #171717;
-        border: 1px solid #262626;
-        border-radius: 8px;
-        padding: 15px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-    }
-    
-    div[data-testid="stMetricValue"] {
-        font-size: 1.8rem !important;
-        font-weight: 800 !important;
-        color: #00f2fe;
-    }
-
-    /* Track Crate Card Style */
-    .track-card {
-        background-color: #171717;
-        border: 1px solid #262626;
-        border-radius: 10px;
-        padding: 16px;
-        margin-bottom: 12px;
-        transition: transform 0.2s, border-color 0.2s;
-    }
-    .track-card:hover {
-        border-color: #00f2fe;
-        transform: translateY(-2px);
-    }
-    .track-title {
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: #ffffff;
-    }
-    .track-artist {
-        font-size: 0.95rem;
-        color: #aaaaaa;
-        margin-bottom: 8px;
-    }
-    .badge {
-        display: inline-block;
-        padding: 3px 8px;
-        font-size: 0.75rem;
-        font-weight: 700;
-        border-radius: 4px;
-        background: #262626;
-        color: #00f2fe;
-        margin-right: 6px;
-    }
+    .stApp { background-color: #0d0d0d; color: #ffffff; font-family: 'Inter', sans-serif; }
+    section[data-testid="stSidebar"] { background-color: #141414; border-right: 1px solid #262626; }
+    .hero-title { font-size: 2.8rem !important; font-weight: 900 !important; letter-spacing: -1.5px; text-transform: uppercase; color: #ffffff; }
+    .hero-subtitle { color: #888888; font-size: 1rem; margin-bottom: 1.5rem; }
+    div[data-testid="stMetric"] { background: #171717; border: 1px solid #262626; border-radius: 8px; padding: 12px; }
+    div[data-testid="stMetricValue"] { font-size: 1.6rem !important; font-weight: 800 !important; color: #00f2fe; }
+    .track-card { background-color: #171717; border: 1px solid #262626; border-radius: 8px; padding: 14px; margin-bottom: 10px; }
+    .track-title { font-size: 1rem; font-weight: 700; color: #ffffff; }
+    .track-artist { font-size: 0.88rem; color: #aaaaaa; margin-bottom: 6px; }
+    .badge { display: inline-block; padding: 2px 6px; font-size: 0.72rem; font-weight: 700; border-radius: 4px; background: #262626; color: #00f2fe; margin-right: 4px; }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
-# 3. CAMELOT HARMONIC MAP
+# Camelot Map
 CAMELOT_MAP = {
     "1A": ["1A", "12A", "2A", "1B"],
     "1B": ["1B", "12B", "2B", "1A"],
@@ -130,28 +59,40 @@ CAMELOT_MAP = {
 }
 
 
-# --- HELPER FUNCTIONS ---
+# XML Parser Function
 def parse_rekordbox_xml(xml_file):
     tree = ET.parse(xml_file)
     root = tree.getroot()
     tracks = []
+
     for track in root.findall(".//TRACK"):
+        # Safely convert BPM
+        bpm_val = track.attrib.get("AverageBpm", "0")
+        try:
+            bpm = float(bpm_val)
+        except ValueError:
+            bpm = 0.0
+
+        # Convert Rekordbox Rating (0-255 scale) to Energy (1-10 scale)
+        rating_val = track.attrib.get("Rating", "0")
+        try:
+            raw_rating = int(rating_val)
+            energy = max(1, min(10, round(raw_rating / 25.5))) if raw_rating > 0 else 1
+        except ValueError:
+            energy = 1
+
+        genre = track.attrib.get("Genre", "").strip()
+        if not genre:
+            genre = "Uncategorized"
+
         tracks.append(
             {
                 "Name": track.attrib.get("Name", "Unknown Title"),
                 "Artist": track.attrib.get("Artist", "Unknown Artist"),
-                "Genre": track.attrib.get("Genre", "Uncategorized"),
-                "BPM": (
-                    float(track.attrib.get("AverageBpm", 0))
-                    if track.attrib.get("AverageBpm")
-                    else 0.0
-                ),
+                "Genre": genre,
+                "BPM": round(bpm, 2),
                 "Key": track.attrib.get("Tonality", "N/A"),
-                "Energy": (
-                    int(track.attrib.get("Rating", 0))
-                    if track.attrib.get("Rating")
-                    else 1
-                ),
+                "Energy": energy,
             }
         )
     return pd.DataFrame(tracks)
@@ -166,17 +107,17 @@ def generate_m3u(df):
     return output.getvalue()
 
 
-# --- HERO HEADER ---
+# Header Section
 st.markdown(
     '<div class="hero-title">NEXT-GEN DJ SET BUILDER</div>',
     unsafe_allow_html=True,
 )
 st.markdown(
-    '<div class="hero-subtitle">Harmonic Key Matching • Dynamic BPM Engine • Crate Management</div>',
+    '<div class="hero-subtitle">Harmonic Key Matching • Dynamic BPM Engine • Collection Management</div>',
     unsafe_allow_html=True,
 )
 
-# --- SIDEBAR CONTROL PANEL ---
+# Sidebar Controls
 st.sidebar.markdown("### 🎛️ CRATE CONTROLS")
 uploaded_file = st.sidebar.file_uploader(
     "Import Collection", type=["xml", "csv", "m3u", "m3u8"]
@@ -185,13 +126,13 @@ uploaded_file = st.sidebar.file_uploader(
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚡ FILTERS")
 bpm_range = st.sidebar.slider(
-    "BPM Range", 60.0, 180.0, (80.0, 135.0), step=1.0
+    "BPM Range", 60.0, 180.0, (60.0, 180.0), step=1.0
 )
 energy_range = st.sidebar.slider("Energy Floor", 1, 10, (1, 10), step=1)
 
-# --- MAIN APP FLOW ---
+# Application Logic
 if uploaded_file is not None:
-    if "df" not in st.session_state:
+    if "df" not in st.session_state or st.sidebar.button("🔄 Reload File Data"):
         file_ext = uploaded_file.name.split(".")[-1].lower()
         if file_ext == "xml":
             df_loaded = parse_rekordbox_xml(uploaded_file)
@@ -218,31 +159,26 @@ if uploaded_file is not None:
                 ]
             )
 
-        for col, val in [
-            ("Genre", "Uncategorized"),
-            ("BPM", 0.0),
-            ("Energy", 1),
-            ("Key", "N/A"),
-        ]:
-            if col not in df_loaded.columns:
-                df_loaded[col] = val
-
         st.session_state["df"] = df_loaded
 
     df = st.session_state["df"]
 
-    # Sidebar Filter Options
-    genres = sorted(list(df["Genre"].dropna().unique()))
+    # Dynamic Genre Selection (Defaults to ALL Genres)
+    available_genres = sorted(list(df["Genre"].dropna().unique()))
     selected_genres = st.sidebar.multiselect(
-        "Genres", options=genres, default=genres
+        "Filter Genres",
+        options=available_genres,
+        default=available_genres,
     )
 
-    keys = sorted([k for k in df["Key"].dropna().unique() if k in CAMELOT_MAP])
+    available_keys = sorted(
+        [k for k in df["Key"].dropna().unique() if k in CAMELOT_MAP]
+    )
     selected_key = st.sidebar.selectbox(
-        "Camelot Target Key", options=["Any Key"] + keys
+        "Camelot Target Key", options=["Any Key"] + available_keys
     )
 
-    # Filter Logic
+    # Apply Filtering
     filtered_df = df[
         (df["BPM"] >= bpm_range[0])
         & (df["BPM"] <= bpm_range[1])
@@ -255,7 +191,7 @@ if uploaded_file is not None:
         comp_keys = CAMELOT_MAP.get(selected_key, [selected_key])
         filtered_df = filtered_df[filtered_df["Key"].isin(comp_keys)]
 
-    # DASHBOARD METRICS
+    # Metrics Display
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("TOTAL TRACKS", len(df))
     m2.metric("CRATE MATCHES", len(filtered_df))
@@ -274,7 +210,7 @@ if uploaded_file is not None:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # VIEW TOGGLE & EXPORT HEADER
+    # Export & Output
     head_col1, head_col2 = st.columns([3, 1])
     with head_col1:
         st.subheader("🔥 CURATED CRATE")
@@ -283,12 +219,11 @@ if uploaded_file is not None:
             st.download_button(
                 label="⚡ EXPORT PLAYLIST (.M3U)",
                 data=generate_m3u(filtered_df),
-                file_name="bpm_supreme_setlist.m3u",
+                file_name="ai_dj_setlist.m3u",
                 mime="audio/x-mpegurl",
                 use_container_width=True,
             )
 
-    # CRATE CARDS GRID VIEW
     view_option = st.radio(
         "Display Mode",
         ["Visual Crate Cards", "Compact Table Data"],
@@ -297,8 +232,10 @@ if uploaded_file is not None:
     )
 
     if view_option == "Visual Crate Cards":
-        cols = st.columns(2)  # Two-column card grid layout
-        for idx, (_, row) in enumerate(filtered_df.iterrows()):
+        # Limit visual cards rendering to top 200 matches for performance with large libraries
+        display_df = filtered_df.head(200)
+        cols = st.columns(2)
+        for idx, (_, row) in enumerate(display_df.iterrows()):
             col = cols[idx % 2]
             with col:
                 col.markdown(
