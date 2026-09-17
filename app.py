@@ -79,7 +79,6 @@ def fetch_audio_preview(artist, title):
         pass
     return None
 
-
 # Transition Analysis Helper
 def analyze_transition(prev_track, curr_track):
     if prev_track is None:
