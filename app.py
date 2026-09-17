@@ -68,13 +68,49 @@ CAMELOT_MAP = {
 @st.cache_data(show_spinner=False)
 def fetch_audio_preview(artist, title):
     try:
-        query = requests.utils.quote(f"{artist} {title}")
-        url = f"https://itunes.apple.com/search?term={query}&entity=song&limit=1"
+        # 1. Clean track titles for raw search
+        raw_artist = artist.split('&')[0].split(',')[0].strip()
+        
+        # Check if the user's track is explicitly a remix
+        is_remix = bool(re.search(r'remix|edit|mix|dub|vip', title, re.IGNORECASE))
+        
+        # Strip brackets for a clean core search term
+        clean_title = re.sub(r'[\(\[\{].*?[\)\]\}]', '', title).strip()
+        clean_artist = re.sub(r'ft\.|feat\.|featuring', '', raw_artist, flags=re.IGNORECASE).strip()
+
+        query = requests.utils.quote(f"{clean_artist} {clean_title}")
+        url = f"https://itunes.apple.com/search?term={query}&entity=song&limit=10"
+        
         res = requests.get(url, timeout=2.5)
         if res.status_code == 200:
             results = res.json().get("results", [])
-            if results and "previewUrl" in results[0]:
-                return results[0]["previewUrl"]
+            
+            for item in results:
+                preview_url = item.get("previewUrl")
+                if not preview_url:
+                    continue
+                    
+                itunes_title = item.get("trackName", "").lower()
+                itunes_artist = item.get("artistName", "").lower()
+                
+                # Reject known bad matches
+                bad_keywords = ["tribute", "karaoke", "cover", "originally performed", "instrumental version"]
+                if any(kw in itunes_title for kw in bad_keywords):
+                    continue
+                
+                # Strict Remix Match Check:
+                # If library track is NOT a remix, reject iTunes results that ARE remixes
+                itunes_is_remix = bool(re.search(r'remix|edit|mix|dub|vip', itunes_title, re.IGNORECASE))
+                if not is_remix and itunes_is_remix:
+                    continue
+                
+                # Title Word Match Verification (At least 50% of original title words must exist in iTunes title)
+                title_words = set(re.findall(r'\w+', clean_title.lower()))
+                itunes_words = set(re.findall(r'\w+', itunes_title))
+                
+                if title_words and len(title_words.intersection(itunes_words)) / len(title_words) >= 0.5:
+                    return preview_url
+
     except Exception:
         pass
     return None
