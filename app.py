@@ -1,4 +1,5 @@
 import io
+import re
 import xml.etree.ElementTree as ET
 import pandas as pd
 import requests
@@ -28,6 +29,8 @@ st.markdown(
     .badge { display: inline-block; padding: 2px 6px; font-size: 0.72rem; font-weight: 700; border-radius: 4px; background: #262626; color: #00f2fe; margin-right: 4px; }
     .badge-harmonic { background: #0d3b2e; color: #00ffa3; border: 1px solid #00ffa3; }
     .badge-pitch { background: #3b2a0d; color: #ffb700; border: 1px solid #ffb700; }
+    .badge-key-shift { background: #3a1548; color: #d946ef; border: 1px solid #d946ef; }
+    .badge-cue { background: #1a2e3b; color: #38bdf8; border: 1px solid #38bdf8; }
     .set-step { background: #121820; border-left: 4px solid #00f2fe; padding: 12px 16px; margin-bottom: 8px; border-radius: 6px; }
     .wizard-header { font-size: 1.1rem; font-weight: 800; color: #00f2fe; text-transform: uppercase; margin-bottom: 12px; }
 </style>
@@ -35,7 +38,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Camelot Compatibility Map
+# Camelot Map & Transposition System
 CAMELOT_MAP = {
     "1A": ["1A", "12A", "2A", "1B"],
     "1B": ["1B", "12B", "2B", "1A"],
@@ -63,62 +66,105 @@ CAMELOT_MAP = {
     "12B": ["12B", "11B", "1B", "12A"],
 }
 
+# Key Transposition Shifts (±1 Semitone)
+KEY_SHIFT_UP = {
+    "1A": "8A",
+    "2A": "9A",
+    "3A": "10A",
+    "4A": "11A",
+    "5A": "12A",
+    "6A": "1A",
+    "7A": "2A",
+    "8A": "3A",
+    "9A": "4A",
+    "10A": "5A",
+    "11A": "6A",
+    "12A": "7A",
+    "1B": "8B",
+    "2B": "9B",
+    "3B": "10B",
+    "4B": "11B",
+    "5B": "12B",
+    "6B": "1B",
+    "7B": "2B",
+    "8B": "3B",
+    "9B": "4B",
+    "10B": "5B",
+    "11B": "6B",
+    "12B": "7B",
+}
 
-# Audio Preview Cache
+
+# Enhanced Audio Preview Matcher
 @st.cache_data(show_spinner=False)
 def fetch_audio_preview(artist, title):
     try:
-        # 1. Clean track titles for raw search
-        raw_artist = artist.split('&')[0].split(',')[0].strip()
-        
-        # Check if the user's track is explicitly a remix
-        is_remix = bool(re.search(r'remix|edit|mix|dub|vip', title, re.IGNORECASE))
-        
-        # Strip brackets for a clean core search term
-        clean_title = re.sub(r'[\(\[\{].*?[\)\]\}]', '', title).strip()
-        clean_artist = re.sub(r'ft\.|feat\.|featuring', '', raw_artist, flags=re.IGNORECASE).strip()
+        raw_artist = artist.split("&")[0].split(",")[0].strip()
+        is_remix = bool(
+            re.search(r"remix|edit|mix|dub|vip", title, re.IGNORECASE)
+        )
+
+        clean_title = re.sub(r"[\(\[\{].*?[\)\]\}]", "", title).strip()
+        clean_artist = re.sub(
+            r"ft\.|feat\.|featuring", "", raw_artist, flags=re.IGNORECASE
+        ).strip()
 
         query = requests.utils.quote(f"{clean_artist} {clean_title}")
-        url = f"https://itunes.apple.com/search?term={query}&entity=song&limit=10"
-        
+        url = (
+            f"https://itunes.apple.com/search?term={query}&entity=song&limit=10"
+        )
+
         res = requests.get(url, timeout=2.5)
         if res.status_code == 200:
             results = res.json().get("results", [])
-            
+
             for item in results:
                 preview_url = item.get("previewUrl")
                 if not preview_url:
                     continue
-                    
+
                 itunes_title = item.get("trackName", "").lower()
-                itunes_artist = item.get("artistName", "").lower()
-                
-                # Reject known bad matches
-                bad_keywords = ["tribute", "karaoke", "cover", "originally performed", "instrumental version"]
+
+                bad_keywords = [
+                    "tribute",
+                    "karaoke",
+                    "cover",
+                    "originally performed",
+                    "instrumental version",
+                ]
                 if any(kw in itunes_title for kw in bad_keywords):
                     continue
-                
-                # Strict Remix Match Check:
-                # If library track is NOT a remix, reject iTunes results that ARE remixes
-                itunes_is_remix = bool(re.search(r'remix|edit|mix|dub|vip', itunes_title, re.IGNORECASE))
+
+                itunes_is_remix = bool(
+                    re.search(r"remix|edit|mix|dub|vip", itunes_title, re.IGNORECASE)
+                )
                 if not is_remix and itunes_is_remix:
                     continue
-                
-                # Title Word Match Verification (At least 50% of original title words must exist in iTunes title)
-                title_words = set(re.findall(r'\w+', clean_title.lower()))
-                itunes_words = set(re.findall(r'\w+', itunes_title))
-                
-                if title_words and len(title_words.intersection(itunes_words)) / len(title_words) >= 0.5:
-                    return preview_url
 
+                title_words = set(re.findall(r"\w+", clean_title.lower()))
+                itunes_words = set(re.findall(r"\w+", itunes_title))
+
+                if (
+                    title_words
+                    and len(title_words.intersection(itunes_words))
+                    / len(title_words)
+                    >= 0.5
+                ):
+                    return preview_url
     except Exception:
         pass
     return None
 
-# Transition Analysis Helper
+
+# Advanced Transition Analysis & Transposition Detector
 def analyze_transition(prev_track, curr_track):
     if prev_track is None:
-        return "🏁 SEED TRACK", "0.0%"
+        return (
+            "🏁 SEED TRACK",
+            "0.0%",
+            "Standard Pitch",
+            "Outro: 32 Bars → Intro: 32 Bars",
+        )
 
     k1, k2 = str(prev_track["Key"]), str(curr_track["Key"])
     bpm1, bpm2 = float(prev_track["BPM"]), float(curr_track["BPM"])
@@ -128,6 +174,11 @@ def analyze_transition(prev_track, curr_track):
         pct_diff = ((bpm2 - bpm1) / bpm1) * 100
         pitch_str = f"{pct_diff:+.1f}%"
 
+    transposition_advice = "Standard Pitch"
+    if k1 != "N/A" and k2 != "N/A":
+        if KEY_SHIFT_UP.get(k2) in CAMELOT_MAP.get(k1, []):
+            transposition_advice = "Key Lock: Shift +1 Semitone"
+
     if k1 == "N/A" or k2 == "N/A":
         key_rel = "Unknown Key Match"
     elif k1 == k2:
@@ -136,10 +187,18 @@ def analyze_transition(prev_track, curr_track):
         key_rel = "Relative Major/Minor"
     elif k2 in CAMELOT_MAP.get(k1, []):
         key_rel = "Harmonic Match (Camelot ±1)"
+    elif transposition_advice != "Standard Pitch":
+        key_rel = "Compatible via Transposition"
     else:
         key_rel = "Energy Key Shift"
 
-    return key_rel, pitch_str
+    e1, e2 = prev_track.get("Energy", 5), curr_track.get("Energy", 5)
+    if abs(e1 - e2) >= 3:
+        cue_advice = "Quick Drop Mix (16-Bar Outro / 8-Bar Intro)"
+    else:
+        cue_advice = "Smooth Blend (32-Bar Outro / 32-Bar Intro)"
+
+    return key_rel, pitch_str, transposition_advice, cue_advice
 
 
 # Persistent Parsers
@@ -277,7 +336,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown(
-    '<div class="hero-subtitle">Harmonic Key Matching • Dynamic BPM Engine • AI Set Curator</div>',
+    '<div class="hero-subtitle">Harmonic Key Matching • Waveform Insights • Key Transposition • AI Curator</div>',
     unsafe_allow_html=True,
 )
 
@@ -294,7 +353,7 @@ bpm_range = st.sidebar.slider(
 )
 energy_range = st.sidebar.slider("Energy Floor", 1, 10, (1, 10), step=1)
 
-# File Upload Processing
+# File Processing
 if uploaded_file is not None:
     file_bytes = uploaded_file.getvalue()
     file_ext = uploaded_file.name.split(".")[-1].lower()
@@ -309,7 +368,7 @@ if uploaded_file is not None:
     st.session_state["df"] = df_loaded
     st.session_state["last_file"] = uploaded_file.name
 
-# Main Application Logic
+# Main Execution
 if "df" in st.session_state and not st.session_state["df"].empty:
     df = st.session_state["df"]
 
@@ -360,8 +419,12 @@ if "df" in st.session_state and not st.session_state["df"].empty:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    tab_crate, tab_ai_builder = st.tabs(
-        ["🔥 Curated Crate", "🤖 AI Harmonic Set Builder"]
+    tab_crate, tab_ai_builder, tab_snapshots = st.tabs(
+        [
+            "🔥 Curated Crate",
+            "🤖 AI Harmonic Set Builder",
+            "📊 Snapshots & Comparisons",
+        ]
     )
 
     with tab_crate:
@@ -419,7 +482,7 @@ if "df" in st.session_state and not st.session_state["df"].empty:
         else:
             st.dataframe(filtered_df, use_container_width=True, hide_index=True)
 
-    # 4-STEP AI SET WIZARD
+    # 4-STEP WIZARD WITH GRAPH & TRANSPOSITION
     with tab_ai_builder:
         if filtered_df.empty:
             st.warning("No tracks available in the current filter selection.")
@@ -429,11 +492,10 @@ if "df" in st.session_state and not st.session_state["df"].empty:
 
             current_step = st.session_state["wizard_step"]
 
-            # Progress Bar
             st.progress(current_step / 4)
             st.caption(f"STEP {current_step} OF 4")
 
-            # STEP 1: Select Genre / Vibe
+            # STEP 1
             if current_step == 1:
                 st.markdown(
                     '<div class="wizard-header">1: Select Genre & Vibe</div>',
@@ -461,7 +523,7 @@ if "df" in st.session_state and not st.session_state["df"].empty:
                         st.session_state["wizard_step"] = 2
                         st.rerun()
 
-            # STEP 2: Choose Anchor Track
+            # STEP 2
             elif current_step == 2:
                 st.markdown(
                     '<div class="wizard-header">2: Choose Anchor Track</div>',
@@ -491,7 +553,7 @@ if "df" in st.session_state and not st.session_state["df"].empty:
                         st.session_state["wizard_step"] = 3
                         st.rerun()
 
-            # STEP 3: Set Energy Profile
+            # STEP 3
             elif current_step == 3:
                 st.markdown(
                     '<div class="wizard-header">3: Set Energy Profile & Length</div>',
@@ -538,10 +600,10 @@ if "df" in st.session_state and not st.session_state["df"].empty:
                         st.session_state["wizard_step"] = 4
                         st.rerun()
 
-            # STEP 4: Review & Export
+            # STEP 4: REVIEW, ENERGY GRAPH & WAVEFORMS
             elif current_step == 4:
                 st.markdown(
-                    '<div class="wizard-header">4: Review & Export Sequence</div>',
+                    '<div class="wizard-header">4: Set Sequence & Live Energy Profile</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -549,10 +611,38 @@ if "df" in st.session_state and not st.session_state["df"].empty:
                 if staged_list:
                     export_df = pd.DataFrame(staged_list)
 
+                    # Energy Flow Graph
+                    st.markdown("##### 📈 Set Energy Flow Chart")
+                    chart_data = pd.DataFrame(
+                        {
+                            "Track Order": [
+                                f"#{i+1} {t['Name'][:12]}..."
+                                for i, t in enumerate(staged_list)
+                            ],
+                            "Energy Rating": [
+                                t["Energy"] for t in staged_list
+                            ],
+                        }
+                    )
+                    st.line_chart(
+                        chart_data.set_index("Track Order"), height=200
+                    )
+
+                    st.markdown("---")
+
                     e_col1, e_col2, e_col3 = st.columns([2, 1, 1])
+                    with e_col1:
+                        if st.button("💾 SAVE SET TO SNAPSHOTS"):
+                            if "saved_snapshots" not in st.session_state:
+                                st.session_state["saved_snapshots"] = []
+                            st.session_state["saved_snapshots"].append(
+                                staged_list
+                            )
+                            st.success("Set saved to Snapshots tab!")
+
                     with e_col2:
                         st.download_button(
-                            label="⚡ EXPORT SET (.M3U)",
+                            label="⚡ EXPORT (.M3U)",
                             data=generate_m3u(export_df),
                             file_name="ai_harmonic_set.m3u",
                             mime="audio/x-mpegurl",
@@ -565,9 +655,12 @@ if "df" in st.session_state and not st.session_state["df"].empty:
 
                     for i, track in enumerate(staged_list):
                         prev_track = staged_list[i - 1] if i > 0 else None
-                        key_match_label, pitch_shift = analyze_transition(
-                            prev_track, track
-                        )
+                        (
+                            key_match_label,
+                            pitch_shift,
+                            transposition,
+                            cue_advice,
+                        ) = analyze_transition(prev_track, track)
 
                         t_col, b_col1, b_col2 = st.columns([8, 1, 1])
 
@@ -581,6 +674,22 @@ if "df" in st.session_state and not st.session_state["df"].empty:
                                 <span class="badge">ENERGY {track['Energy']}/10</span>
                                 <span class="badge badge-harmonic">TRANSITION: {key_match_label}</span>
                                 <span class="badge badge-pitch">PITCH: {pitch_shift}</span>
+                                <span class="badge badge-key-shift">{transposition}</span>
+                                <span class="badge badge-cue">📍 {cue_advice}</span>
+                            </div>
+                            """,
+                                unsafe_allow_html=True,
+                            )
+
+                            # Synthetic Waveform Visualizer
+                            wf_bg = "#1f2937"
+                            wf_fill = "#00f2fe" if i % 2 == 0 else "#ff007f"
+                            st.markdown(
+                                f"""
+                            <div style="background:{wf_bg}; height:24px; border-radius:4px; width:100%; display:flex; align-items:center; padding:0 8px; margin-bottom:12px;">
+                                <div style="background:{wf_fill}; height:60%; width:15%; border-radius:2px; opacity:0.5;"></div>
+                                <div style="background:{wf_fill}; height:90%; width:70%; border-radius:2px; margin:0 4px;"></div>
+                                <div style="background:{wf_fill}; height:60%; width:15%; border-radius:2px; opacity:0.5;"></div>
                             </div>
                             """,
                                 unsafe_allow_html=True,
@@ -609,6 +718,34 @@ if "df" in st.session_state and not st.session_state["df"].empty:
                                         st.session_state["staged_set"][i],
                                     )
                                     st.rerun()
+
+    # SNAPSHOTS TAB
+    with tab_snapshots:
+        st.subheader("📊 Saved Set Snapshots")
+        snapshots = st.session_state.get("saved_snapshots", [])
+
+        if not snapshots:
+            st.info(
+                "No saved sets yet. Generate a set in Step 4 of the wizard and click 'SAVE SET TO SNAPSHOTS'."
+            )
+        else:
+            for s_idx, set_item in enumerate(snapshots):
+                s_df = pd.DataFrame(set_item)
+                valid_b = s_df[s_df["BPM"] > 0]["BPM"]
+                avg_bpm = f"{valid_b.mean():.1f}" if not valid_b.empty else "N/A"
+                avg_energy = f"{s_df['Energy'].mean():.1f}"
+
+                with st.expander(
+                    f"📁 Snapshot #{s_idx+1} — {len(set_item)} Tracks | Avg BPM: {avg_bpm} | Avg Energy: {avg_energy}"
+                ):
+                    st.dataframe(s_df, use_container_width=True, hide_index=True)
+                    st.download_button(
+                        label=f"EXPORT SNAPSHOT #{s_idx+1} (.M3U)",
+                        data=generate_m3u(s_df),
+                        file_name=f"snapshot_set_{s_idx+1}.m3u",
+                        mime="audio/x-mpegurl",
+                        key=f"dl_snap_{s_idx}",
+                    )
 
 else:
     st.info("👈 Upload your music library file in the sidebar to enter the builder.")
