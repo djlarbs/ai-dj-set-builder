@@ -29,6 +29,7 @@ st.markdown(
     .badge-harmonic { background: #0d3b2e; color: #00ffa3; border: 1px solid #00ffa3; }
     .badge-pitch { background: #3b2a0d; color: #ffb700; border: 1px solid #ffb700; }
     .set-step { background: #121820; border-left: 4px solid #00f2fe; padding: 12px 16px; margin-bottom: 8px; border-radius: 6px; }
+    .wizard-header { font-size: 1.1rem; font-weight: 800; color: #00f2fe; text-transform: uppercase; margin-bottom: 12px; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -79,7 +80,7 @@ def fetch_audio_preview(artist, title):
     return None
 
 
-# Helper: Transition Analysis
+# Transition Analysis Helper
 def analyze_transition(prev_track, curr_track):
     if prev_track is None:
         return "🏁 SEED TRACK", "0.0%"
@@ -106,7 +107,7 @@ def analyze_transition(prev_track, curr_track):
     return key_rel, pitch_str
 
 
-# Persistent File Parsers with Caching
+# Persistent Parsers
 @st.cache_data(show_spinner="Parsing Collection...")
 def parse_rekordbox_xml(file_bytes):
     tree = ET.parse(io.BytesIO(file_bytes))
@@ -241,11 +242,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown(
-    '<div class="hero-subtitle">Harmonic Key Matching • Persistent Cache • AI Set Curator</div>',
+    '<div class="hero-subtitle">Harmonic Key Matching • Dynamic BPM Engine • AI Set Curator</div>',
     unsafe_allow_html=True,
 )
 
-# Sidebar Controls
+# Sidebar
 st.sidebar.markdown("### 🎛️ CRATE CONTROLS")
 uploaded_file = st.sidebar.file_uploader(
     "Import Collection", type=["xml", "csv", "m3u", "m3u8"]
@@ -258,7 +259,7 @@ bpm_range = st.sidebar.slider(
 )
 energy_range = st.sidebar.slider("Energy Floor", 1, 10, (1, 10), step=1)
 
-# File Processing & Cache Restoration
+# File Upload Processing
 if uploaded_file is not None:
     file_bytes = uploaded_file.getvalue()
     file_ext = uploaded_file.name.split(".")[-1].lower()
@@ -273,7 +274,7 @@ if uploaded_file is not None:
     st.session_state["df"] = df_loaded
     st.session_state["last_file"] = uploaded_file.name
 
-# Main Application Execution (Runs even on page refresh if data is cached in session)
+# Main Application Logic
 if "df" in st.session_state and not st.session_state["df"].empty:
     df = st.session_state["df"]
 
@@ -305,7 +306,7 @@ if "df" in st.session_state and not st.session_state["df"].empty:
             filtered_df["Key"].isin(comp_keys) | (filtered_df["Key"] == "N/A")
         ]
 
-    # Metrics Row
+    # Metrics
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("TOTAL TRACKS", len(df))
     m2.metric("CRATE MATCHES", len(filtered_df))
@@ -383,120 +384,196 @@ if "df" in st.session_state and not st.session_state["df"].empty:
         else:
             st.dataframe(filtered_df, use_container_width=True, hide_index=True)
 
+    # 4-STEP AI SET WIZARD
     with tab_ai_builder:
-        st.subheader("🎯 Configure Your AI Set Strategy")
         if filtered_df.empty:
             st.warning("No tracks available in the current filter selection.")
         else:
-            c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+            if "wizard_step" not in st.session_state:
+                st.session_state["wizard_step"] = 1
 
-            with c1:
+            current_step = st.session_state["wizard_step"]
+
+            # Progress Bar
+            st.progress(current_step / 4)
+            st.caption(f"STEP {current_step} OF 4")
+
+            # STEP 1: Select Genre / Vibe
+            if current_step == 1:
+                st.markdown(
+                    '<div class="wizard-header">1: Select Genre & Vibe</div>',
+                    unsafe_allow_html=True,
+                )
+
+                w_genres = st.multiselect(
+                    "Target Set Genres",
+                    options=available_genres,
+                    default=available_genres,
+                )
+                w_priority = st.selectbox(
+                    "Harmonic Mix Priority",
+                    ["Strict Harmonic Key First", "Closest BPM First"],
+                )
+
+                step1_df = filtered_df[filtered_df["Genre"].isin(w_genres)]
+
+                if st.button("NEXT: CHOOSE ANCHOR TRACK ➔"):
+                    if step1_df.empty:
+                        st.error("No tracks match the selected genres.")
+                    else:
+                        st.session_state["w_df"] = step1_df
+                        st.session_state["w_priority"] = w_priority
+                        st.session_state["wizard_step"] = 2
+                        st.rerun()
+
+            # STEP 2: Choose Anchor Track
+            elif current_step == 2:
+                st.markdown(
+                    '<div class="wizard-header">2: Choose Anchor Track</div>',
+                    unsafe_allow_html=True,
+                )
+
+                w_pool = st.session_state.get("w_df", filtered_df)
                 track_labels = [
                     f"{row['Artist']} - {row['Name']} ({row['Key']} / {row['BPM']} BPM)"
-                    for _, row in filtered_df.iterrows()
+                    for _, row in w_pool.iterrows()
                 ]
-                selected_seed_idx = st.selectbox(
-                    "Starting Track (Anchor)",
+
+                selected_idx = st.selectbox(
+                    "Select Starting Track (Opener)",
                     range(len(track_labels)),
                     format_func=lambda x: track_labels[x],
                 )
 
-            with c2:
-                set_length = st.number_input(
-                    "Set Length (# Tracks)",
-                    min_value=3,
-                    max_value=30,
-                    value=8,
-                    step=1,
+                nav1, nav2 = st.columns([1, 1])
+                with nav1:
+                    if st.button("⬅ BACK"):
+                        st.session_state["wizard_step"] = 1
+                        st.rerun()
+                with nav2:
+                    if st.button("NEXT: SET ENERGY PROFILE ➔"):
+                        st.session_state["w_seed_idx"] = selected_idx
+                        st.session_state["wizard_step"] = 3
+                        st.rerun()
+
+            # STEP 3: Set Energy Profile
+            elif current_step == 3:
+                st.markdown(
+                    '<div class="wizard-header">3: Set Energy Profile & Length</div>',
+                    unsafe_allow_html=True,
                 )
 
-            with c3:
-                energy_curve = st.selectbox(
-                    "Energy Curve Strategy",
-                    ["Maintain Energy", "Gradual Ramp Up", "Peak Hour Drop"],
-                )
-
-            with c4:
-                priority = st.selectbox(
-                    "Mix Priority",
-                    ["Strict Harmonic Key First", "Closest BPM First"],
-                )
-
-            if st.button("🚀 BUILD HARMONIC SET", use_container_width=True):
-                seed_row = filtered_df.iloc[selected_seed_idx]
-                prioritize_key = priority == "Strict Harmonic Key First"
-
-                st.session_state["staged_set"] = build_harmonic_set(
-                    seed_row,
-                    filtered_df,
-                    set_length,
-                    energy_curve,
-                    prioritize_key,
-                )
-
-            if "staged_set" in st.session_state and st.session_state["staged_set"]:
-                st.markdown("---")
-                st.subheader("🎧 Generated Harmonic Sequence")
-
-                staged_list = st.session_state["staged_set"]
-                export_df = pd.DataFrame(staged_list)
-
-                export_col1, export_col2 = st.columns([3, 1])
-                with export_col2:
-                    st.download_button(
-                        label="⚡ EXPORT SET (.M3U)",
-                        data=generate_m3u(export_df),
-                        file_name="ai_harmonic_set.m3u",
-                        mime="audio/x-mpegurl",
-                        use_container_width=True,
+                e1, e2 = st.columns(2)
+                with e1:
+                    w_curve = st.selectbox(
+                        "Energy Progression",
+                        ["Maintain Energy", "Gradual Ramp Up", "Peak Hour Drop"],
+                    )
+                with e2:
+                    w_length = st.number_input(
+                        "Total Track Count",
+                        min_value=3,
+                        max_value=30,
+                        value=8,
+                        step=1,
                     )
 
-                for i, track in enumerate(staged_list):
-                    prev_track = staged_list[i - 1] if i > 0 else None
-                    key_match_label, pitch_shift = analyze_transition(
-                        prev_track, track
-                    )
-
-                    t_col, b_col1, b_col2 = st.columns([8, 1, 1])
-
-                    with t_col:
-                        st.markdown(
-                            f"""
-                        <div class="set-step">
-                            <strong>Track {i+1}: {track['Artist']} — {track['Name']}</strong><br>
-                            <span class="badge">KEY {track['Key']}</span>
-                            <span class="badge">BPM {track['BPM']}</span>
-                            <span class="badge">ENERGY {track['Energy']}/10</span>
-                            <span class="badge badge-harmonic">TRANSITION: {key_match_label}</span>
-                            <span class="badge badge-pitch">PITCH: {pitch_shift}</span>
-                        </div>
-                        """,
-                            unsafe_allow_html=True,
+                nav1, nav2 = st.columns([1, 1])
+                with nav1:
+                    if st.button("⬅ BACK"):
+                        st.session_state["wizard_step"] = 2
+                        st.rerun()
+                with nav2:
+                    if st.button("🚀 GENERATE AI SET"):
+                        w_pool = st.session_state.get("w_df", filtered_df)
+                        seed_idx = st.session_state.get("w_seed_idx", 0)
+                        seed_row = w_pool.iloc[seed_idx]
+                        prioritize_key = (
+                            st.session_state.get("w_priority")
+                            == "Strict Harmonic Key First"
                         )
 
-                    with b_col1:
-                        if i > 0:
-                            if st.button("▲", key=f"up_{i}"):
-                                (
-                                    st.session_state["staged_set"][i],
-                                    st.session_state["staged_set"][i - 1],
-                                ) = (
-                                    st.session_state["staged_set"][i - 1],
-                                    st.session_state["staged_set"][i],
-                                )
-                                st.rerun()
+                        st.session_state["staged_set"] = build_harmonic_set(
+                            seed_row,
+                            w_pool,
+                            w_length,
+                            w_curve,
+                            prioritize_key,
+                        )
+                        st.session_state["wizard_step"] = 4
+                        st.rerun()
 
-                    with b_col2:
-                        if i < len(staged_list) - 1:
-                            if st.button("▼", key=f"down_{i}"):
-                                (
-                                    st.session_state["staged_set"][i],
-                                    st.session_state["staged_set"][i + 1],
-                                ) = (
-                                    st.session_state["staged_set"][i + 1],
-                                    st.session_state["staged_set"][i],
-                                )
-                                st.rerun()
+            # STEP 4: Review & Export
+            elif current_step == 4:
+                st.markdown(
+                    '<div class="wizard-header">4: Review & Export Sequence</div>',
+                    unsafe_allow_html=True,
+                )
+
+                staged_list = st.session_state.get("staged_set", [])
+                if staged_list:
+                    export_df = pd.DataFrame(staged_list)
+
+                    e_col1, e_col2, e_col3 = st.columns([2, 1, 1])
+                    with e_col2:
+                        st.download_button(
+                            label="⚡ EXPORT SET (.M3U)",
+                            data=generate_m3u(export_df),
+                            file_name="ai_harmonic_set.m3u",
+                            mime="audio/x-mpegurl",
+                            use_container_width=True,
+                        )
+                    with e_col3:
+                        if st.button("🔄 RESTART WIZARD"):
+                            st.session_state["wizard_step"] = 1
+                            st.rerun()
+
+                    for i, track in enumerate(staged_list):
+                        prev_track = staged_list[i - 1] if i > 0 else None
+                        key_match_label, pitch_shift = analyze_transition(
+                            prev_track, track
+                        )
+
+                        t_col, b_col1, b_col2 = st.columns([8, 1, 1])
+
+                        with t_col:
+                            st.markdown(
+                                f"""
+                            <div class="set-step">
+                                <strong>Track {i+1}: {track['Artist']} — {track['Name']}</strong><br>
+                                <span class="badge">KEY {track['Key']}</span>
+                                <span class="badge">BPM {track['BPM']}</span>
+                                <span class="badge">ENERGY {track['Energy']}/10</span>
+                                <span class="badge badge-harmonic">TRANSITION: {key_match_label}</span>
+                                <span class="badge badge-pitch">PITCH: {pitch_shift}</span>
+                            </div>
+                            """,
+                                unsafe_allow_html=True,
+                            )
+
+                        with b_col1:
+                            if i > 0:
+                                if st.button("▲", key=f"up_{i}"):
+                                    (
+                                        st.session_state["staged_set"][i],
+                                        st.session_state["staged_set"][i - 1],
+                                    ) = (
+                                        st.session_state["staged_set"][i - 1],
+                                        st.session_state["staged_set"][i],
+                                    )
+                                    st.rerun()
+
+                        with b_col2:
+                            if i < len(staged_list) - 1:
+                                if st.button("▼", key=f"down_{i}"):
+                                    (
+                                        st.session_state["staged_set"][i],
+                                        st.session_state["staged_set"][i + 1],
+                                    ) = (
+                                        st.session_state["staged_set"][i + 1],
+                                        st.session_state["staged_set"][i],
+                                    )
+                                    st.rerun()
 
 else:
     st.info("👈 Upload your music library file in the sidebar to enter the builder.")
